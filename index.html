@@ -12,7 +12,7 @@
   <!-- MarkerCluster -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
-  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.js"></script>
 
   <!-- PapaParse for CSV -->
   <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
@@ -40,10 +40,10 @@
     }
     .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
     .grow { flex: 1 1 220px; }
-    #map { height: calc(100% - 330px); }
-    @media (min-width: 880px) { #map { height: calc(100% - 240px); } }
+    #map { height: calc(100% - 360px); }
+    @media (min-width: 880px) { #map { height: calc(100% - 260px); } }
 
-    .btn, .file, input[type="text"], textarea, input[type="tel"], input[type="file"] {
+    .btn, .file, input[type="text"], textarea, input[type="file"] {
       padding: 10px 12px;
       border: 1px solid var(--border);
       border-radius: 12px;
@@ -76,10 +76,10 @@
     .marker-cluster-small div { background-color: rgba(249, 115, 22, 0.8); color:#fff; }
     .marker-cluster-medium { background-color: rgba(249, 115, 22, 0.5); }
     .marker-cluster-medium div { background-color: rgba(249, 115, 22, 0.85); color:#fff; }
-    .marker-cluster-large { background-color: rgba(249, 115, 22, 0.6); }
-    .marker-cluster-large div { background-color: rgba(234, 88, 12, 0.95); color:#fff; }
+    .marker-cluster-large { background-color: rgba(234, 88, 12, 0.95); color:#fff; }
 
     .danger { color: #b91c1c; font-weight: 700; }
+    .kbd { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-size: 12px; background: #f3f4f6; border: 1px solid #e5e7eb; border-radius: 6px; padding: 2px 6px; }
   </style>
 </head>
 <body>
@@ -90,7 +90,7 @@
         <input id="file" type="file" accept=".csv" style="display:none" />
       </label>
       <button id="fit" class="btn ghost">🗺️ ซูมพอดีทุกหมุด</button>
-      <button id="settings" class="btn ghost">⚙️ ตั้งค่า Flow</button>
+      <button id="settings" class="btn ghost">⚙️ ตั้งค่า</button>
       <span id="counter" class="badge">หมุดทั้งหมด: 0</span>
       <span class="hint">* พิกัดหัวตาราง: Latitude/Lat, Longitude/Lon/Lng</span>
     </div>
@@ -129,40 +129,41 @@
     <div class="row">
       <span id="flowWarn" class="danger"></span>
     </div>
+    <div class="row">
+      <span class="hint">โหมด payload: <span id="modeBadge" class="kbd">numbers</span> • ส่งไปที่: <span id="destBadge" class="kbd">flow</span></span>
+    </div>
   </div>
 
   <div id="map"></div>
 
   <script>
-    // ===== Default config (แก้ได้ในเมนู ⚙️ และจะถูกบันทึกใน localStorage) =====
-    // * ใส่ URL logic.azure.com ที่มี &sig=... จะดีที่สุด
-    // * ข้างล่างนี้คือ URL environment.api ที่คุณให้มา (มีโอกาส 401)
-    const FLOW_URL_DEFAULT = "https://5a1c2d740043e072baa147741b6585.82.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/72fe4f8d63de43458a586604820694e4/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=GgjyMXF1-bxZ9BGMvZ6aRt5HASwEir3zcnxQqY2gx0Y";
-    const API_KEY_DEFAULT = ""; // ถ้าต้องการ header x-api-key ให้ใส่ในตั้งค่า
-
-    const CFG_KEY = "nsb2b_cfg_v1";
-    function loadCfg() {
-      try { return JSON.parse(localStorage.getItem(CFG_KEY) || "{}"); } catch { return {}; }
-    }
+    // ===== Config persisted in localStorage =====
+    const CFG_KEY = "nsb2b_cfg_v2";
+    const DEFAULTS = {
+      flowUrl: "https://5a1c2d740043e072baa147741b6585.82.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/72fe4f8d63de43458a586604820694e4/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=GgjyMXF1-bxZ9BGMvZ6aRt5HASwEir3zcnxQqY2gx0Y",
+      apiKey: "",
+      schemaMode: "numbers",      // "numbers" or "latlng"
+      customHeaderName: "",        // e.g. "x-nsb2b-secret"
+      customHeaderValue: "",
+      proxyUrl: ""                 // optional: if set, will send to proxyUrl instead of flowUrl
+    };
+    function loadCfg() { try { return { ...DEFAULTS, ...(JSON.parse(localStorage.getItem(CFG_KEY) || "{}")) }; } catch { return { ...DEFAULTS }; } }
     function saveCfg(cfg) { localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); }
-    function getFlowUrl() {
-      const cfg = loadCfg();
-      return (cfg.flowUrl || FLOW_URL_DEFAULT || "").trim();
-    }
-    function getApiKey() {
-      const cfg = loadCfg();
-      return (cfg.apiKey || API_KEY_DEFAULT || "").trim();
-    }
     function setWarn() {
-      const url = getFlowUrl();
+      const { flowUrl } = loadCfg();
       const el = document.getElementById('flowWarn');
-      if (!url) {
+      if (!flowUrl) {
         el.textContent = "ยังไม่ได้ตั้งค่า FLOW URL (แนะนำ logic.azure.com + &sig=...)";
-      } else if (!/logic\.azure\.com/i.test(url)) {
-        el.textContent = "กำลังใช้ environment.api.powerplatform.com (มีโอกาส 401) → ควรเปลี่ยนเป็น logic.azure.com";
+      } else if (!/logic\\.azure\\.com/i.test(flowUrl)) {
+        el.textContent = "กำลังใช้ environment.api.powerplatform.com (อาจติด CORS/OAuth) → ควรเปลี่ยนเป็น logic.azure.com";
       } else {
         el.textContent = "";
       }
+    }
+    function setBadges() {
+      const { schemaMode, proxyUrl } = loadCfg();
+      document.getElementById('modeBadge').textContent = schemaMode;
+      document.getElementById('destBadge').textContent = proxyUrl ? "proxy" : "flow";
     }
 
     // ===== Map setup =====
@@ -172,12 +173,11 @@
       attribution: '&copy; OpenStreetMap contributors'
     }).addTo(map);
     map.setView([13.736, 100.523], 6);
-
     const cluster = L.markerClusterGroup({ showCoverageOnHover:false, maxClusterRadius:50 }).addTo(map);
     let currentBounds = null;
 
     // ===== Helpers =====
-    const LS_KEY = "nsb2b_points_v4";
+    const LS_KEY = "nsb2b_points_v5";
     const $ = (sel) => document.querySelector(sel);
     const toNum = (v) => {
       if (v === null || v === undefined) return NaN;
@@ -194,7 +194,7 @@
     }
     function fitBounds() { if (currentBounds) map.fitBounds(currentBounds, { padding:[40,40] }); }
 
-    async function readImageAsDataURL(file, maxW=1280, maxH=1280, quality=0.85) {
+    async function readImageAsDataURL(file, maxW=1024, maxH=1024, quality=0.75) {
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => {
@@ -291,32 +291,70 @@
       let photoDataURL = ''; const f = $('#photo').files?.[0];
       if (f) { try { photoDataURL = await readImageAsDataURL(f); } catch {} }
       return {
-  Latitude: lat,   // << number
-  Longitude: lon,  // << number
-  GoogleMapsURL: googleMapsLink(lat, lon),
-  Details: $('#details').value.trim(),
-  PhotoDataURL: photoDataURL,
-  CreatedAt: new Date().toISOString()
-};
+        Latitude: lat,             // number
+        Longitude: lon,            // number
+        GoogleMapsURL: googleMapsLink(lat, lon),
+        Details: $('#details').value.trim(),
+        PhotoDataURL: photoDataURL,
+        CreatedAt: new Date().toISOString()
+      };
     }
     function resetAfterSave() { $('#details').value=''; $('#photo').value=''; $('#photoName').textContent=''; }
     function toast(msg) { $('#status').textContent = msg; setTimeout(()=>$('#status').textContent='', 1500); }
 
+    // ===== Sending =====
+    function makePayload(rec) {
+      const { schemaMode } = loadCfg();
+      if (schemaMode === 'latlng') {
+        // legacy/simple schema like: { latlng: "13.7:100.5", google: "...", details: "...", createdAt: "...", photo: "base64" }
+        return {
+          latlng: `${rec.Latitude}:${rec.Longitude}`,
+          google: rec.GoogleMapsURL,
+          details: rec.Details,
+          createdAt: rec.CreatedAt,
+          photo: rec.PhotoDataURL ? String(rec.PhotoDataURL).split(',').slice(1).join(',') : ""
+        };
+      }
+      // default: numbers schema
+      return rec;
+    }
+
+    async function fetchWithRetry(url, options, retries = 2, baseDelayMs = 800) {
+      for (let attempt = 0; attempt <= retries; attempt++) {
+        const res = await fetch(url, options).catch(err => ({ ok:false, status:0, text: async()=> String(err) }));
+        if (res.ok) return res;
+        const shouldRetry = [429, 500, 502, 503, 504].includes(res.status);
+        if (!shouldRetry || attempt === retries) return res;
+        const delay = baseDelayMs * Math.pow(2, attempt);
+        await new Promise(r => setTimeout(r, delay));
+      }
+    }
+
+    async function sendToFlow(rec) {
+      const cfg = loadCfg();
+      const url = (cfg.proxyUrl && cfg.proxyUrl.trim()) ? cfg.proxyUrl.trim() : cfg.flowUrl.trim();
+      if (!url) throw new Error("ยังไม่ได้ตั้งค่า URL");
+      const headers = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
+      if (cfg.apiKey) headers['x-api-key'] = cfg.apiKey;
+      if (cfg.customHeaderName && cfg.customHeaderValue) {
+        headers[cfg.customHeaderName] = cfg.customHeaderValue;
+      }
+      const body = JSON.stringify(makePayload(rec));
+      const res = await fetchWithRetry(url, { method:'POST', headers, body }, 2, 800);
+      if (!res || !res.ok) {
+        const txt = res ? (await res.text().catch(()=>'')) : 'no response';
+        throw new Error(`HTTP ${res ? res.status : 0} ${txt}`);
+      }
+      return res.json().catch(()=> ({}));
+    }
+
+    // Buttons
     $('#save').addEventListener('click', async () => {
       const rec = await buildRecordFromForm(); if (!rec) return;
       const local = readLocal(); local.push(rec); writeLocal(local);
       addPoints([rec], false); currentBounds = cluster.getBounds(); updateCounter();
       resetAfterSave(); toast('บันทึกแล้ว');
     });
-
-    async function sendToFlow(rec) {
-      const url = getFlowUrl();
-      const headers = { 'Content-Type': 'application/json' };
-      const apiKey = getApiKey(); if (apiKey) headers['x-api-key'] = apiKey;
-      const res = await fetch(url, { method:'POST', headers, body: JSON.stringify(rec) });
-      if (!res.ok) { const txt = await res.text().catch(()=> ''); throw new Error('HTTP '+res.status+' '+txt); }
-      return res.json().catch(()=> ({}));
-    }
 
     $('#send').addEventListener('click', async () => {
       const rec = await buildRecordFromForm(); if (!rec) return;
@@ -344,22 +382,38 @@
       localStorage.removeItem(LS_KEY); cluster.clearLayers(); currentBounds = null; map.setView([13.736,100.523],6); updateCounter();
     });
 
-    // Settings prompt
+    // Settings prompt (simple)
     document.getElementById('settings').addEventListener('click', () => {
       const cfg = loadCfg();
-      const currentUrl = cfg.flowUrl ?? FLOW_URL_DEFAULT;
-      const currentKey = cfg.apiKey ?? API_KEY_DEFAULT;
-      const url = prompt("https://5a1c2d740043e072baa147741b6585.82.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/72fe4f8d63de43458a586604820694e4/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=GgjyMXF1-bxZ9BGMvZ6aRt5HASwEir3zcnxQqY2gx0Y", currentUrl || "");
-      if (url === null) return;
-      const key = prompt("yytiyniuiyiuumpkupo6rtd_gf___tdrsrrsrsesssstttfdteqqasrrrdtuyf", currentKey || "");
-      saveCfg({ flowUrl: (url||"").trim(), apiKey: (key||"").trim() });
+      const flowUrl = prompt("FLOW URL (แนะนำ logic.azure.com + &sig=...)", cfg.flowUrl);
+      if (flowUrl === null) return;
+      const apiKey = prompt("x-api-key (ถ้าไม่ได้ใช้ ให้เว้นว่าง)", cfg.apiKey);
+      if (apiKey === null) return;
+      const schemaMode = prompt("payload mode: numbers หรือ latlng", cfg.schemaMode);
+      if (schemaMode === null) return;
+      const customHeaderName = prompt("Custom header name (เช่น x-nsb2b-secret) – ว่างได้", cfg.customHeaderName);
+      if (customHeaderName === null) return;
+      const customHeaderValue = customHeaderName ? prompt("Custom header value", cfg.customHeaderValue) : "";
+      if (customHeaderName && customHeaderValue === null) return;
+      const proxyUrl = prompt("Proxy URL (เช่น Cloudflare Worker) – ว่างได้", cfg.proxyUrl);
+
+      saveCfg({
+        flowUrl: (flowUrl||"").trim(),
+        apiKey: (apiKey||"").trim(),
+        schemaMode: (schemaMode||"numbers").toLowerCase().startsWith("latlng") ? "latlng" : "numbers",
+        customHeaderName: (customHeaderName||"").trim(),
+        customHeaderValue: (customHeaderValue||"").trim(),
+        proxyUrl: (proxyUrl||"").trim()
+      });
       setWarn();
+      setBadges();
       toast('บันทึกการตั้งค่าแล้ว');
     });
 
     // First load
     refreshFromLocal();
     setWarn();
+    setBadges();
   </script>
 </body>
 </html>
